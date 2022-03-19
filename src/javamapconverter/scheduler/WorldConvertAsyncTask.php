@@ -24,6 +24,7 @@ use function basename;
 use function ceil;
 use function count;
 use function explode;
+use function floor;
 use function glob;
 use function implode;
 use function is_dir;
@@ -37,29 +38,15 @@ use function zlib_decode;
 
 class WorldConvertAsyncTask extends AsyncTask {
 
-    /** @var string */
-    private $level;
-    /** @var string */
-    private $error;
-    /** @var bool */
-    private $showProgress;
-    /** @var int */
-    private $chunksUntilSleep;
+    private string $error = "";
+    private array $skulls = [];
 
-    /** @var array  */
-    private $skulls = [];
-
-    /**
-     * WorldConvertAsyncTask constructor.
-     * @param string $level
-     * @param bool $showProgress
-     * @param int $chunksUntilSleep
-     */
-    public function __construct(string $level, bool $showProgress = false, int $chunksUntilSleep = 10){
-        $this->level = $level;
-        $this->showProgress = $showProgress;
-        $this->chunksUntilSleep = $chunksUntilSleep;
-    }
+    public function __construct(
+        private string $level,
+        private bool $showProgress = false,
+        private int $chunksUntilSleep = 10,
+        private bool $ignoreHeads = false
+    ){}
 
     public function onRun(): void {
         $level = $this->level;
@@ -147,7 +134,9 @@ class WorldConvertAsyncTask extends AsyncTask {
                         }
                     }
                 }
-                MainLogger::getLogger()->info("§r§a" . $sPercentage . "% §7| §a " . $chunksFinished . "§7/§a" . count($chunks) . " §7| §a" . str_repeat("§a█", (int)ceil($percentage)) . "§7" . str_repeat("§7█", (int)ceil(100 - $percentage)) . $extraBox);
+                if(floor($percentage) % 5 === 0) {
+                    MainLogger::getLogger()->info("§r§a" . $sPercentage . "% §7| §a " . $chunksFinished . "§7/§a" . count($chunks) . " §7| §a" . str_repeat("§a█", (int)ceil($percentage)) . "§7" . str_repeat("§7█", (int)ceil(100 - $percentage)) . $extraBox);
+                }
             }
         }
         MainLogger::getLogger()->info(Loader::PREFIX . "Converted world " . $this->level . ". Took " . round(microtime(true) - $microtime, 2) . " seconds");
@@ -162,14 +151,16 @@ class WorldConvertAsyncTask extends AsyncTask {
         $level = $server->getLevelByName($this->level);
         if(is_null($level)) return;
 
-        foreach($this->skulls as $vector3 => $skullRot) {
-            $vector3 = explode(":", $vector3);
-            $vector3 = new Vector3($vector3[0], $vector3[1], $vector3[2]);
-            $level->loadChunk($vector3->x >> 4, $vector3->z >> 4);
+        if(!$this->ignoreHeads) {
+            foreach($this->skulls as $vector3 => $skullRot) {
+                $vector3 = explode(":", $vector3);
+                $vector3 = new Vector3($vector3[0], $vector3[1], $vector3[2]);
+                $level->loadChunk($vector3->x >> 4, $vector3->z >> 4);
 
-            $nbt = SkullTile::createNBT($vector3);
-            $nbt->setByte("Rot", $skullRot);
-            Tile::createTile("Skull", $level, $nbt);
+                $nbt = SkullTile::createNBT($vector3);
+                $nbt->setByte("Rot", $skullRot);
+                Tile::createTile("Skull", $level, $nbt);
+            }
         }
     }
 
@@ -195,27 +186,29 @@ class WorldConvertAsyncTask extends AsyncTask {
                     if($region->chunkExists($x, $z)) {
                         $chunks[] = [($regionX << 5) + $x, ($regionZ << 5) + $z];
 
-                        $chunkData = $region->readChunk($x, $z);
-                        if($chunkData !== null){
-                            $skullChunk = new SkullChunk($this->level, ($regionX << 5) + $x, ($regionZ << 5) + $z);
-                            foreach($this->getTiles($chunkData) as $tile) {
-                                if(!$tile->hasTag("Owner")) continue;
-                                $owner = $tile->getTag("Owner");
-                                if(!isset($owner->getValue()["Properties"])) continue;
-                                $skinId = explode("/", base64_decode($owner->getValue()["Properties"]->getValue()["textures"]->getValue()[0]["Value"]));
-                                $skinId = $skinId[4];
-                                foreach([" ", "}}}", '"', "},CAPE:{url:http:", ",metadata:{model:slim}}}}"] as $str) $skinId = str_replace($str, "", $skinId);
+                        if(!$this->ignoreHeads) {
+                            $chunkData = $region->readChunk($x, $z);
+                            if($chunkData !== null){
+                                $skullChunk = new SkullChunk($this->level, ($regionX << 5) + $x, ($regionZ << 5) + $z);
+                                foreach($this->getTiles($chunkData) as $tile) {
+                                    if(!$tile->hasTag("Owner")) continue;
+                                    $owner = $tile->getTag("Owner");
+                                    if(!isset($owner->getValue()["Properties"])) continue;
+                                    $skinId = explode("/", base64_decode($owner->getValue()["Properties"]->getValue()["textures"]->getValue()[0]["Value"]));
+                                    $skinId = $skinId[4];
+                                    foreach([" ", "}}}", '"', "},CAPE:{url:http:", ",metadata:{model:slim}}}}"] as $str) $skinId = str_replace($str, "", $skinId);
 
-                                $vector3 = new Vector3(
-                                    $tile->getTag("x")->getValue(),
-                                    $tile->getTag("y")->getValue(),
-                                    $tile->getTag("z")->getValue()
-                                );
-                                $skullChunk->addSkull($vector3, $skinId);
+                                    $vector3 = new Vector3(
+                                        $tile->getTag("x")->getValue(),
+                                        $tile->getTag("y")->getValue(),
+                                        $tile->getTag("z")->getValue()
+                                    );
+                                    $skullChunk->addSkull($vector3, $skinId);
 
-                                $this->skulls[implode(":", [$vector3->x, $vector3->y, $vector3->z])] = $tile->getTag("Rot")->getValue();
+                                    $this->skulls[implode(":", [$vector3->x, $vector3->y, $vector3->z])] = $tile->getTag("Rot")->getValue();
+                                }
+                                $skullChunk->onUnload();
                             }
-                            $skullChunk->onUnload();
                         }
                     }
                 }

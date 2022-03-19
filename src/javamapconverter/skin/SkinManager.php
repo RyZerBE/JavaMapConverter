@@ -14,7 +14,6 @@ use function file_put_contents;
 use function is_file;
 use function is_null;
 use function mkdir;
-use function var_dump;
 
 class SkinManager {
     use InstantiableTrait;
@@ -65,8 +64,8 @@ class SkinManager {
             return SkinUtils::readImage($file);
         }, function(Server $server, string $result) use ($callable, $skinId, $level): void {
             if(empty($result)){
-                var_dump("Failed:" . $skinId);
-                $this->requestSkinData($skinId, $level, $callable);
+                //var_dump("Failed:" . $skinId);
+                //$this->requestSkinData($skinId, $level, $callable);
                 return;
             }
             SkinManager::getInstance()->cacheSkinData($skinId, $result);
